@@ -1,4 +1,5 @@
 #include "simlib/sandbox2.hh"
+#include "sandbox2_supervisor.hh"
 #include "simlib/concat_tostr.hh"
 #include "simlib/debug.hh"
 #include "simlib/file_contents.hh"
@@ -61,7 +62,8 @@ future execute(const Options& options) {
         THROW("clone3()", errmsg());
     }
     if (pid == 0) {
-        _exit(142); // TODO: run supervisor
+        supervisor::execute(options, std::move(error_fd));
+        __builtin_unreachable();
     }
     // Parent process
     supervisor_pidfd = child_pidfd;

@@ -41,6 +41,8 @@ $(eval $(call add_static_library, $(PREFIX)simlib.a, $(SIMLIB_FLAGS), \
 	$(PREFIX)src/random.cc \
 	$(PREFIX)src/sandbox.cc \
 	$(PREFIX)src/sandbox2.cc \
+	$(PREFIX)src/sandbox2_supervisor.cc \
+	$(PREFIX)src/sandbox2_tracee.cc \
 	$(PREFIX)src/sha.cc \
 	$(PREFIX)src/sim/checker.cc \
 	$(PREFIX)src/sim/compile.cc \
