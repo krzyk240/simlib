@@ -83,6 +83,7 @@ simlib_libsources = files([
     'src/process.cc',
     'src/random.cc',
     'src/sandbox.cc',
+    'src/sandbox2.cc',
     'src/sha.cc',
     'src/sim/checker.cc',
     'src/sim/compile.cc',
