@@ -4,6 +4,7 @@
 #include "simlib/file_descriptor.hh"
 #include "simlib/file_manip.hh"
 #include "simlib/path.hh"
+#include "simlib/pipe.hh"
 #include "simlib/sandbox2.hh"
 #include "simlib/string_traits.hh"
 #include "simlib/syscalls.hh"
@@ -17,6 +18,7 @@
 #include <sys/capability.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <unistd.h>
 
 namespace {
 
@@ -48,6 +50,28 @@ struct Tracee {
         if (failed) {
             die(args..., errmsg());
         }
+    }
+
+    void initialize(Pipe sync_pipe) noexcept {
+        // New process name
+        die_if_err(prctl(PR_SET_NAME, "init", 0, 0, 0), "prctl(PR_SET_NAME)");
+        // Kill us if supervisor dies. On our death kernel will kill all descendants since we
+        // are the init process in the current pid namespace.
+        die_if_err(prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0), "prctl(PR_SET_PDEATHSIG)");
+        // Ensure supervisor did not die before we set PR_SET_PDEATHSIG
+        die_if_err(sync_pipe.readable.close(), "close(sync_pipe.readable)");
+        int rc = write(sync_pipe.writable, "", 1);
+        if (rc == 0) {
+            die("write(sync_pipe) == 0");
+        }
+        if (rc == -1) {
+            if (errno == EPIPE) {
+                die("supervisor died");
+            }
+            die_if_err(true, "write(sync_pipe)");
+        }
+        assert(rc == 1);
+        die_if_err(sync_pipe.writable.close(), "close(sync_pipe.writable)");
     }
 
     void write_proc_file(CStringView file_path, StringView contents) noexcept {
@@ -220,7 +244,7 @@ struct Tracee {
 namespace sandbox::tracee {
 
 void execute(
-    const Options& options, FileDescriptor error_fd, uid_t supervisor_euid,
+    const Options& options, FileDescriptor error_fd, Pipe sync_pipe, uid_t supervisor_euid,
     gid_t supervisor_egid) noexcept {
     Tracee tra = {
         .options = options,
@@ -228,6 +252,7 @@ void execute(
         .supervisor_egid = supervisor_egid,
         .error_fd = std::move(error_fd),
     };
+    tra.initialize(std::move(sync_pipe));
     tra.setup_user_namespace();
     tra.prepare_executable();
     tra.setup_fs();

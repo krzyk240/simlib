@@ -57,12 +57,13 @@ future execute(const Options& options) {
         .pidfd = reinterpret_cast<uintptr_t>(&child_pidfd),
         .exit_signal = SIGCHLD,
     };
+    auto parent_pid = getpid();
     auto pid = syscalls::clone3(&cl_args);
     if (pid == -1) {
         THROW("clone3()", errmsg());
     }
     if (pid == 0) {
-        supervisor::execute(options, std::move(error_fd));
+        supervisor::execute(options, std::move(error_fd), parent_pid);
         __builtin_unreachable();
     }
     // Parent process

@@ -3,6 +3,7 @@
 #include "simlib/debug.hh"
 #include "simlib/file_contents.hh"
 #include "simlib/file_descriptor.hh"
+#include "simlib/pipe.hh"
 #include "simlib/sandbox2.hh"
 #include "simlib/string_view.hh"
 #include "simlib/syscalls.hh"
@@ -19,6 +20,7 @@
 #include <map>
 #include <optional>
 #include <sys/cdefs.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -122,12 +124,41 @@ struct Supervisor {
         }
     }
 
+    void initialize(pid_t parent_pid) noexcept {
+        // New process name
+        die_if_err(prctl(PR_SET_NAME, "supervisor", 0, 0, 0), "prctl(PR_SET_NAME)");
+        // Kill us if our parent dies
+        die_if_err(prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0), "prctl(PR_SET_PDEATHSIG)");
+        // Ensure our parent did not die before we set PR_SET_PDEATHSIG
+        if (getppid() != parent_pid) {
+            die("creator of supervisor process died");
+        }
+    }
+
+    void sync_with_tracee(Pipe sync_pipe) {
+        char val{};
+        die_if_err(sync_pipe.writable.close(), "close(sync_pipe.writable)");
+        auto rc = read(sync_pipe.readable, &val, 1);
+        if (rc == 0) {
+            die("read(sync_pipe) == 0");
+        }
+        die_if_err(rc == -1, "read(sync_pipe)");
+        assert(rc == 1);
+        die_if_err(sync_pipe.readable.close(), "close(sync_pipe.readable)");
+    }
+
     void run_tracee(const sandbox::Options& options) noexcept {
         const auto supervisor_euid = geteuid();
         const auto supervisor_egid = getegid();
         if (supervisor_euid == 0) {
             die("Sandbox is not secure if run as root/sudo");
         }
+
+        auto sync_pipe = [&] {
+            auto pipe_opt = pipe2(O_CLOEXEC);
+            die_if_err(not pipe_opt, "pipe2()");
+            return std::move(*pipe_opt);
+        }();
 
         int child_pidfd{};
         clone_args cl_args = {
@@ -140,13 +171,16 @@ struct Supervisor {
         if (tracee.pid == 0) {
             // Child process
             sandbox::tracee::execute(
-                options, std::move(error_fd), supervisor_euid, supervisor_egid);
+                options, std::move(error_fd), std::move(sync_pipe), supervisor_euid,
+                supervisor_egid);
             __builtin_unreachable();
         }
         // Parent process
         tracee.pidfd = child_pidfd;
         assert(tracee.state == Tracee::NOT_STARTED);
         tracee.state = Tracee::KILLABLE;
+
+        sync_with_tracee(std::move(sync_pipe));
     }
 
     void die_on_tracee_error() noexcept {
@@ -187,8 +221,9 @@ struct Supervisor {
 
 namespace sandbox::supervisor {
 
-void execute(const Options& options, FileDescriptor error_fd) noexcept {
+void execute(const Options& options, FileDescriptor error_fd, int parent_pid) noexcept {
     Supervisor sup{std::move(error_fd)};
+    sup.initialize(parent_pid);
     sup.run_tracee(options);
     // TODO: ptrace
     // TODO: timers
