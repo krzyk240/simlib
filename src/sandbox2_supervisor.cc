@@ -1,5 +1,6 @@
 #include "sandbox2_supervisor.hh"
 #include "sandbox2_tracee.hh"
+#include "simlib/concat_tostr.hh"
 #include "simlib/debug.hh"
 #include "simlib/file_contents.hh"
 #include "simlib/file_descriptor.hh"
@@ -409,18 +410,33 @@ struct Supervisor {
         return {PTRACE_CONT, 0};
     }
 
-    RestartTracee process_ptrace_event_stop_new_tracee(siginfo_t& si) noexcept {
-        debuglog("[", si.si_pid, "] STOP in new tracee");
-        // This event may happen before CLONE, FORK, VFORK event due to the fact that the two
-        // processes run concurrently. Moreover, it may not happen at all e.g. when the new
-        // tracee is SIGKILLed, then only tracee death may be observed (and maybe EXIT event,
-        // depending on the kernel implementation)
+    static RestartTracee
+    process_ptrace_event_stop_group_stop(siginfo_t& si, int sig) noexcept {
+        debuglog("[", si.si_pid, "] STOP: group-stop by signal ", sig_name(sig));
+        (void)system(concat_tostr("cat /proc/", si.si_pid, "/status").data());
+        (void)system(concat_tostr("cat /proc/", si.si_pid, "/stat").data());
+        // std::abort(); // TODO: TODO
+        return {PTRACE_LISTEN, 0};
+    }
+
+    RestartTracee process_ptrace_event_interrupt_stop(siginfo_t& si) noexcept {
+        debuglog("[", si.si_pid, "] STOP: interrupt stop");
+        // This event may be caused by PTRACE_INTERRUPT, exit from a group stop, or in a new
+        // child just after creation. The latter event may happen before CLONE, FORK, VFORK
+        // event due to the fact that the two processes run concurrently. Moreover, it may not
+        // happen at all e.g. when the new tracee is SIGKILLed, then only tracee death may be
+        // observed (and maybe EXIT event, depending on the kernel implementation)
         (void)tracee_info(si.si_pid); // may create a record for the new tracee
         return {PTRACE_CONT, 0};
     }
 
     RestartTracee process_ptrace_event_stop(siginfo_t& si) noexcept {
         auto sig = si.si_status ^ (PTRACE_EVENT_STOP << 8);
+        // siginfo_t ssi;
+        // die_if_err(ptrace(PTRACE_GETSIGINFO, si.si_pid, 0, &ssi), "ptrace(GETSIGINFO)");
+        // debuglog.verbose(
+        //     "      ({pid: ", ssi.si_pid, ", signo: ", ssi.si_signo, ", code: ", ssi.si_code,
+        //     ", status: ", ssi.si_status, "})");
         switch (sig) {
         case SIGSTOP:
         case SIGTSTP:
@@ -430,7 +446,7 @@ struct Supervisor {
             // new-tracee-attached-stop or PTRACE_INTERRUPT-stop, both have sig == SIGTRAP;
             // PTRACE_INTERRUPT-stop should not happen as we don't use PTRACE_INTERRUPT
             assert(sig == SIGTRAP);
-            return process_ptrace_event_stop_new_tracee(si);
+            return process_ptrace_event_interrupt_stop(si);
         }
     }
 
@@ -558,7 +574,8 @@ struct Supervisor {
         for (;;) {
             siginfo_t si;
             // Wait for events
-            auto rc = syscalls::waitid(P_ALL, 0, &si, __WALL | WEXITED | WNOWAIT, nullptr);
+            auto rc = syscalls::waitid(
+                P_ALL, 0, &si, __WALL | WEXITED | WSTOPPED | WCONTINUED | WNOWAIT, nullptr);
             if (rc == -1 and errno == ECHILD) {
                 // This way is safer than looping until tracees_holder->empty() because it may
                 // happen that we see process death before we get an event from its

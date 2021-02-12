@@ -304,7 +304,7 @@ void execute(
     tra.initialize(std::move(sync_pipe));
     tra.setup_user_namespace();
     tra.prepare_executable();
-    tra.setup_fs();
+    // tra.setup_fs();
     tra.drop_capabilities();
     tra.wait_for_ptrace();
     tra.spawn_main_tracee();
