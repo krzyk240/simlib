@@ -7,7 +7,7 @@
 namespace sandbox::tracee {
 
 [[noreturn]] void execute(
-    const Options& options, FileDescriptor error_fd, Pipe sync_pipe, uid_t supervisor_euid,
-    gid_t supervisor_egid) noexcept;
+    const Options& options, FileDescriptor error_fd, Pipe sync_pipe,
+    FileDescriptor ptrace_sync_fd, uid_t supervisor_euid, gid_t supervisor_egid) noexcept;
 
 } // namespace sandbox::tracee
